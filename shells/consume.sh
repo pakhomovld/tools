@@ -1,26 +1,35 @@
 #!/bin/bash
 
-# shell script for maintain $MAX_INSTANCES of consumer
-# can be used to maintain a certain number of threads of something
+# Shell script to manage a pool of consumer processes
 
 MAX_INSTANCES=6
-CURRENT_INSTANCES=0
+LOCK_FILE=/var/run/consumer_pool.lock
 
-while (( "$CURRENT_INSTANCES" != "$MAX_INSTANCES" ))
-do
-    sleep 5
-    CURRENT_INSTANCES=$(ps ax | grep -v grep | grep -ie ":[0-9]\{2\} php /var/www/app/artisan consume --persistent" 
-| wc -l)
+# Check if lock file exists
+if [ -f "$LOCK_FILE" ]; then
+  echo "Lock file exists, exiting."
+  exit 1
+fi
 
-    if (( "$CURRENT_INSTANCES" > "$MAX_INSTANCES" ))
-	then
-        DIFF_INSTANCES=$(( $CURRENT_INSTANCES - $MAX_INSTANCES ))
-	PIDS=$(ps -ef | grep -v grep | grep ":[0-9]\{2\} php /var/www/app/artisan consume --persistent" | awk 
-'{print $2}' | head -n $DIFF_INSTANCES)
-	kill -9 $PIDS
-	exit 0;
-    elif (( "$CURRENT_INSTANCES" < "$MAX_INSTANCES" ))
-	then
-        php /var/www/app/artisan consume --persistent &
-    fi
+# Create lock file
+touch "$LOCK_FILE"
+
+# Cleanup function to remove lock file
+function cleanup {
+  rm -f "$LOCK_FILE"
+}
+
+# Register cleanup function to run on exit
+trap cleanup EXIT
+
+# Start consumers
+while true; do
+  CURRENT_INSTANCES=$(ps ax | grep -v grep | grep -ie ":[0-9]\{2\} php /var/www/app/artisan consume --persistent" | wc -l)
+
+  if (( CURRENT_INSTANCES < MAX_INSTANCES )); then
+    php /var/www/app/artisan consume --persistent >> /var/log/consumer.log 2>&1 &
+  fi
+
+  # Wait a bit before checking again
+  sleep 5
 done
